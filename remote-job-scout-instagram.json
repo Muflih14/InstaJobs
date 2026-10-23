@@ -1,0 +1,710 @@
+{
+  "name": "Remote Job Scout to Instagram copy",
+  "nodes": [
+    {
+      "id": "3ad7bc30-e441-4aae-bfec-ef9b8609b964",
+      "name": "Twice Daily",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        192
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            },
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 16,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "8d7aa1a0-34c1-4e31-b900-a170f705e787",
+      "name": "Fetch Remotive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://remotive.com/api/remote-jobs?limit=100",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "b5360ca1-bbb7-42a2-a5e1-27a8d73a0d64",
+      "name": "Fetch RemoteOK",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        192
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://remoteok.com/api",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; n8n-job-scout)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "752d9262-dbc4-4c55-b194-a89d02bad974",
+      "name": "Fetch Himalayas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        384
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://himalayas.app/jobs/api?limit=20",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "a4bfe4fc-16a8-4ae4-8b21-0a347058d8c4",
+      "name": "Combine Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        496,
+        320
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 3
+      }
+    },
+    {
+      "id": "6216980d-fe96-47d7-9406-82243c660e0f",
+      "name": "Normalize and Filter Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        336
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nfunction strip(s) {\n  return String(s || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\\s+/g, ' ').trim().slice(0, 3500);\n}\nfunction eligible(loc) {\n  var t = String(loc || '').toLowerCase().trim();\n  if (!t) return true;\n  return /worldwide|anywhere|global|nigeria|africa|emea|international/.test(t);\n}\nvar maxAgeMs = 7 * 24 * 3600 * 1000;\nvar now = Date.now();\nvar out = [];\nfor (var it of $input.all()) {\n  var j = it.json || {};\n  if (Array.isArray(j.jobs)) {\n    for (var job of j.jobs) {\n      if (job.company_name !== undefined) {\n        var ts = Date.parse(job.publication_date + 'Z');\n        if (!eligible(job.candidate_required_location)) continue;\n        out.push({ id: 'remotive:' + job.id, source: 'Remotive', title: job.title, company: job.company_name, url: job.url, location: job.candidate_required_location || 'Worldwide', description: strip(job.description), closing: '', ts: ts });\n      } else {\n        var restr = Array.isArray(job.locationRestrictions) ? job.locationRestrictions : [];\n        if (restr.length && !eligible(restr.join(' '))) continue;\n        var closing = job.expiryDate ? new Date(job.expiryDate * 1000).toISOString().slice(0, 10) : '';\n        out.push({ id: 'himalayas:' + (job.guid || job.applicationLink), source: 'Himalayas', title: job.title, company: job.companyName, url: job.applicationLink || job.guid, location: restr.length ? restr.join(', ') : 'Worldwide', description: strip(job.description || job.excerpt), closing: closing, ts: job.pubDate ? job.pubDate * 1000 : now });\n      }\n    }\n  } else if (j.position) {\n    if (!eligible(j.location)) continue;\n    out.push({ id: 'remoteok:' + j.id, source: 'RemoteOK', title: j.position, company: j.company, url: j.apply_url || j.url, location: j.location || 'Worldwide', description: strip(j.description), closing: '', ts: Date.parse(j.date) });\n  }\n}\nout = out.filter(function (o) { return o.title && o.url && (!o.ts || now - o.ts < maxAgeMs); });\nout.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });\nreturn out.map(function (o) { return { json: o }; });\n"
+      }
+    },
+    {
+      "id": "76b37952-7510-4af8-b2d0-e568fe36bb3b",
+      "name": "Get Posted Jobs",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        944,
+        528
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "jJcKEAnOZ7OqKrHr",
+          "cachedResultName": "posted_jobs"
+        },
+        "returnAll": true
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "532a4ceb-7c2e-4bf2-bd55-68db22456cfb",
+      "name": "Pick Unposted",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1168,
+        528
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nvar posted = {};\nvar today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Lagos' });\nvar month = today.slice(0, 7);\nvar perDay = 0, perMonth = 0;\nfor (var p of $input.all()) {\n  var r = p.json || {};\n  if (!r.job_id) continue;\n  posted[r.job_id] = true;\n  var d = String(r.posted_on || '');\n  if (d === today) perDay++;\n  if (d.slice(0, 7) === month) perMonth++;\n}\nvar remaining = Math.min(2 - perDay, 50 - perMonth);\nvar out = [];\nif (remaining <= 0) return out;\nfor (var it of $('Normalize and Filter Jobs').all()) {\n  if (!posted[it.json.id]) out.push({ json: it.json });\n}\nout = out.slice(0, remaining);\nreturn out;\n"
+      }
+    },
+    {
+      "id": "edb79941-ad45-46ee-9469-5fdcd3c96aad",
+      "name": "Limit Jobs",
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        1168,
+        336
+      ],
+      "parameters": {
+        "maxItems": 1
+      }
+    },
+    {
+      "id": "0d94fed6-c3bf-4c7f-8c69-6e91feb65976",
+      "name": "Extract Requirements",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        1024,
+        400
+      ],
+      "parameters": {
+        "resource": "text",
+        "operation": "message",
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "models/gemini-3.7-flash",
+          "cachedResultName": "models/gemini-3.7-flash"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You extract facts from a job posting. Reply with ONLY a JSON object, no markdown, in this exact shape: {\"requirements\":[\"...\"],\"closing_date\":\"YYYY-MM-DD or null\"}. \"requirements\" = the 3 to 5 most essential requirements (skills, experience, qualifications), each under 90 characters. \"closing_date\" = the application deadline only if the text explicitly states one (known value: {{ $json.closing || \"none\" }}), otherwise null. Do not invent anything.\\n\\nTitle: {{ $json.title }}\\nCompany: {{ $json.company }}\\nPosting:\\n{{ $json.description }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 0.2,
+          "maxOutputTokens": 1500,
+          "thinkingBudget": 0
+        }
+      }
+    },
+    {
+      "id": "bcc3f9b1-a9d8-4343-9d56-be276274b771",
+      "name": "Parse Details",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1376,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nvar jobs = $('Limit Jobs').all();\nvar sd = $getWorkflowStaticData('global');\nvar out = [];\nvar all = $input.all();\nfor (var i = 0; i < all.length; i++) {\n  var j = all[i].json;\n  var job = jobs[i].json;\n  var text = '';\n  if (j.content && j.content.parts && j.content.parts[0]) text = j.content.parts[0].text;\n  else if (j.candidates && j.candidates[0]) text = j.candidates[0].content.parts[0].text;\n  else text = j.output || j.text || '';\n  text = String(text).replace(/```json|```/g, '').trim();\n  var parsed = {};\n  try { parsed = JSON.parse(text); } catch (e) { parsed = {}; }\n  var reqs = Array.isArray(parsed.requirements) ? parsed.requirements.slice(0, 5) : [];\n  if (!reqs.length) reqs = ['See the full job description at the application link'];\n  var closing = job.closing || (parsed.closing_date && parsed.closing_date !== 'null' ? parsed.closing_date : '');\n  var closingText = closing || 'Not stated - apply early';\n  var count = sd.postCount || 0;\n  var templateIndex = Math.floor(count / 3) % 2;\n  sd.postCount = count + 1;\n  var caption = 'JOB: ' + job.title + ' (' + job.company + ')\\n\\n' +\n    'Essential Requirements:\\n' + reqs.map(function (r) { return '- ' + r; }).join('\\n') + '\\n\\n' +\n    'Open until: ' + closingText + '\\n\\n' +\n    'Apply here: [[LINK]]\\n\\n' +\n    'Remote role - open to applicants in Nigeria (' + job.location + ')\\n' +\n    '#remotejobs #nigeriajobs #remotework #hiring #jobsinnigeria';\n  out.push({ json: { jobId: job.id, url: job.url, urlIsLong: String(job.url).length > 40, captionBase: caption, templateIndex: templateIndex, title: job.title, company: job.company, reqs: reqs, closingText: closingText } });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "6335728e-8bdd-49fc-8020-f0cb91ed29fc",
+      "name": "Is Link Long",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1824,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "long",
+              "leftValue": "={{ $json.urlIsLong }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "fd10739c-189e-4d1b-9d15-0a5dd9124b6a",
+      "name": "Shorten Link",
+      "type": "n8n-nodes-base.bitly",
+      "typeVersion": 1,
+      "position": [
+        2048,
+        320
+      ],
+      "parameters": {
+        "resource": "link",
+        "operation": "create",
+        "longUrl": "={{ $json.url }}",
+        "additionalFields": {},
+        "authentication": "oAuth2"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "b7148cf6-62c1-426c-ba7e-f8221f26cfaf",
+      "name": "Compose Caption",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2272,
+        400
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "caption",
+              "type": "string",
+              "value": "={{ $('Parse Details').item.json.captionBase.replace('[[LINK]]', $json.link || $('Parse Details').item.json.url) }}"
+            },
+            {
+              "id": "c2",
+              "name": "applyLink",
+              "type": "string",
+              "value": "={{ $json.link || $('Parse Details').item.json.url }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "50711964-387f-419a-b196-106960f4f2a2",
+      "name": "Build Image HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2496,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "\nvar d = $('Parse Details').item.json;\nvar link = $json.applyLink || d.url;\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }\nvar O = '#556B2F', W = '#FFFFFF';\nvar th = d.templateIndex === 1\n  ? { hb: W, hf: O, bb: O, bf: W, fb: W, ff: O, acc: O }\n  : { hb: O, hf: W, bb: W, bf: O, fb: O, ff: W, acc: O };\nvar reqs = (d.reqs || []).slice(0, 4).map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('');\nvar titleSize = String(d.title || '').length > 60 ? 48 : 58;\nvar css = 'body{margin:0;font-family:Montserrat,Arial,sans-serif;}' +\n  '.card{width:1080px;height:1080px;display:flex;flex-direction:column;overflow:hidden;border:10px solid ' + O + ';box-sizing:border-box;}' +\n  '.head{background:' + th.hb + ';color:' + th.hf + ';padding:56px 64px 44px 64px;}' +\n  '.tag{font-size:26px;font-weight:700;letter-spacing:3px;opacity:0.9;}' +\n  '.title{font-size:' + titleSize + 'px;font-weight:800;line-height:1.1;margin-top:22px;}' +\n  '.company{font-size:34px;font-weight:600;margin-top:14px;opacity:0.95;}' +\n  '.body{flex:1;background:' + th.bb + ';color:' + th.bf + ';padding:44px 64px;}' +\n  '.label{font-size:26px;font-weight:800;letter-spacing:2px;text-transform:uppercase;}' +\n  'ul{margin:16px 0 0 0;padding-left:36px;font-size:29px;line-height:1.35;}' +\n  'li{margin-bottom:12px;}' +\n  '.foot{background:' + th.fb + ';color:' + th.ff + ';padding:34px 64px;}' +\n  '.open{font-size:40px;font-weight:800;}' +\n  '.link{font-size:26px;margin-top:10px;word-break:break-all;opacity:0.95;}';\nvar html = '<div class=\"card\"><div class=\"head\"><div class=\"tag\">REMOTE JOB - OPEN TO NIGERIANS</div>' +\n  '<div class=\"title\">' + esc(d.title) + '</div><div class=\"company\">' + esc(d.company) + '</div></div>' +\n  '<div class=\"body\"><div class=\"label\">Essential requirements</div><ul>' + reqs + '</ul></div>' +\n  '<div class=\"foot\"><div class=\"open\">Open until: ' + esc(d.closingText) + '</div>' +\n  '<div class=\"link\">Apply: ' + esc(link) + '</div></div></div>';\nreturn { json: { html: html, css: css } };\n"
+      }
+    },
+    {
+      "id": "877ff201-2eb0-41ca-a94d-30bb7b146b32",
+      "name": "Render Post Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2496,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://hcti.io/v1/image",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ html: $json.html, css: $json.css, viewport_width: 1080, viewport_height: 1080, google_fonts: \"Montserrat:400,600,700,800\" }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "5be7da8d-f1fd-4b6a-88ec-49075fbe634d",
+      "name": "Create Instagram Media",
+      "type": "n8n-nodes-base.facebookGraphApi",
+      "typeVersion": 1,
+      "position": [
+        1776,
+        320
+      ],
+      "parameters": {
+        "authType": "accessToken",
+        "hostUrl": "graph.facebook.com",
+        "httpRequestMethod": "POST",
+        "graphApiVersion": "v22.0",
+        "node": "17841467197270069",
+        "edge": "media",
+        "options": {
+          "queryParameters": {
+            "parameter": [
+              {
+                "name": "image_url",
+                "value": "={{ $json.url }}.jpg"
+              },
+              {
+                "name": "caption",
+                "value": "={{ $('Compose Caption').item.json.caption }}"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "633eca73-3100-4148-9a7d-8ab6a0b08d1f",
+      "name": "Wait for Media Processing",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2000,
+        320
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 10,
+        "unit": "seconds"
+      },
+      "webhookId": "2cea0611-47e6-42a3-a0fa-d82955e08fc9"
+    },
+    {
+      "id": "5eebe675-dbb6-4f4b-933d-5188fc7136f9",
+      "name": "Publish to Instagram",
+      "type": "n8n-nodes-base.facebookGraphApi",
+      "typeVersion": 1,
+      "position": [
+        2224,
+        320
+      ],
+      "parameters": {
+        "authType": "accessToken",
+        "hostUrl": "graph.facebook.com",
+        "httpRequestMethod": "POST",
+        "graphApiVersion": "v22.0",
+        "node": "17841467197270069",
+        "edge": "media_publish",
+        "options": {
+          "queryParameters": {
+            "parameter": [
+              {
+                "name": "creation_id",
+                "value": "={{ $json.id }}"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "24a298e1-7302-452e-8279-50056de96883",
+      "name": "Record Posted Job",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2224,
+        512
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "jJcKEAnOZ7OqKrHr",
+          "cachedResultName": "posted_jobs"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "job_id": "={{ $('Parse Details').item.json.jobId }}",
+            "title": "={{ $('Parse Details').item.json.title }}",
+            "posted_on": "={{ $now.setZone(\"Africa/Lagos\").toFormat(\"yyyy-MM-dd\") }}"
+          },
+          "schema": [
+            {
+              "id": "job_id",
+              "displayName": "job_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "posted_on",
+              "displayName": "posted_on",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Twice Daily": {
+      "main": [
+        [
+          {
+            "node": "Fetch Remotive",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch RemoteOK",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Himalayas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Remotive": {
+      "main": [
+        [
+          {
+            "node": "Combine Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch RemoteOK": {
+      "main": [
+        [
+          {
+            "node": "Combine Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Fetch Himalayas": {
+      "main": [
+        [
+          {
+            "node": "Combine Sources",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Combine Sources": {
+      "main": [
+        [
+          {
+            "node": "Normalize and Filter Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize and Filter Jobs": {
+      "main": [
+        [
+          {
+            "node": "Get Posted Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Posted Jobs": {
+      "main": [
+        [
+          {
+            "node": "Pick Unposted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Unposted": {
+      "main": [
+        [
+          {
+            "node": "Limit Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit Jobs": {
+      "main": [
+        [
+          {
+            "node": "Extract Requirements",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Requirements": {
+      "main": [
+        [
+          {
+            "node": "Parse Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Details": {
+      "main": [
+        [
+          {
+            "node": "Is Link Long",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Link Long": {
+      "main": [
+        [
+          {
+            "node": "Shorten Link",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Compose Caption",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shorten Link": {
+      "main": [
+        [
+          {
+            "node": "Compose Caption",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Caption": {
+      "main": [
+        [
+          {
+            "node": "Build Image HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Image HTML": {
+      "main": [
+        [
+          {
+            "node": "Render Post Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Post Image": {
+      "main": [
+        [
+          {
+            "node": "Create Instagram Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Instagram Media": {
+      "main": [
+        [
+          {
+            "node": "Wait for Media Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Media Processing": {
+      "main": [
+        [
+          {
+            "node": "Publish to Instagram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish to Instagram": {
+      "main": [
+        [
+          {
+            "node": "Record Posted Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  }
+}
