@@ -470,6 +470,40 @@
           ]
         }
       }
+    },
+    {
+      "id": "c9fd7a2c-6eca-4d2a-821b-2dca12bcb457",
+      "name": "Workflow Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        720
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "73380c8b-4716-42ef-8f11-c8930064c7c4",
+      "name": "Email Error Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        224,
+        720
+      ],
+      "parameters": {
+        "resource": "email",
+        "operation": "send",
+        "fromEmail": "muflihaabd@gmail.com",
+        "toEmail": "muflihaabd@gmail.com",
+        "subject": "={{ 'n8n workflow failed: ' + ($json.workflow?.name || 'Unknown workflow') }}",
+        "emailFormat": "text",
+        "text": "={{ 'Workflow: ' + ($json.workflow?.name || 'Unknown') + '\\nExecution: ' + ($json.execution?.id || 'Unknown') + '\\nLast node: ' + ($json.execution?.lastNodeExecuted || 'Unknown') + '\\nError: ' + ($json.execution?.error?.message || 'No error message') + '\\nExecution URL: ' + ($json.execution?.url || 'Unavailable') }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "webhookId": "c4b7449b-7b37-4bf6-8040-fcd3f151f876"
     }
   ],
   "connections": {
@@ -693,6 +727,17 @@
         [
           {
             "node": "Record Posted Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Workflow Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Email Error Alert",
             "type": "main",
             "index": 0
           }
